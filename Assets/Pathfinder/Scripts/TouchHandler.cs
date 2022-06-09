@@ -3,92 +3,68 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 public class TouchHandler : MonoBehaviour
 {
     [SerializeField] private Camera cam;
-    [SerializeField] private float minMoveDistance = -1000f, maxMoveDistance = 1000f, moveSpeed = 10f, rotateSpeed = 0.5f;
+    [SerializeField] private float minMoveDistance = -100f, maxMoveDistance = 100f, moveSpeed = 10f, rotateSpeed = 0.5f;
     [SerializeField] private GameObject canvas;
 
-    [SerializeField] private EventSystem eventSystem;
-
-
-    private TouchController touchController;
-    private GraphicRaycaster raycaster;
-    private PointerEventData m_PointerEventData;
     private Vector3 touchStart, rotateStart;
-    private float rotX = 0f, rotY = 0f;
-    private float groundY = 100f;
+    private float rotX = 0f, rotY = 0f, groundY = 100f;
     private bool isMoving, isLooking;
+    private GraphicRaycaster raycaster;
 
-
-    public void Awake()
-    {
-        touchController = new TouchController();
-        //Fetch the Raycaster from the GameObject (the Canvas)
-        raycaster = canvas.GetComponent<GraphicRaycaster>();
-        //Fetch the Event System from the Scene
-        eventSystem = GetComponent<EventSystem>();
-    }
-
-    public void OnEnable()
-    {
-        touchController.Enable();
-    }
-
-    public void OnDisable()
-    {
-        touchController.Disable();
-    }
 
     public void Start()
     {
-        // subscribe
-        touchController.Touch.PrimaryTouchContact.performed += _ => MoveAroundStart();
-        touchController.Touch.PrimaryTouchContact.canceled += _ => MoveAroundEnd();
-
-        // subscribe
-        touchController.Touch.SecondayTouchContact.performed += _ => LookAroundStart();
-        touchController.Touch.SecondayTouchContact.canceled += _ => LookAroundEnd();
+        raycaster = canvas.GetComponent<GraphicRaycaster>();
     }
 
     public void Update()
     {
-        // TODO is click outside, don't do anything
-        if (isOutside()) { return; }
+        if (isTouchOnCanvas()) { return; }
 
-        if (isLooking) { LookAround(); return; } // don't move if true
-        if (isMoving) { MoveAround(); }
+        // use legacy input system, cause of unity remote
+        switch (Input.touchCount)
+        {
+            case 1:
+                MoveAround();
+                break;
+            case 2:
+                LookAround();
+                break;
+            default:
+                Reset(); 
+                break;
+        }
     }
 
-    private bool isOutside()
+    private bool isTouchOnCanvas()
     {
-        Vector2 touchPosition = touchController.Touch.PrimaryFingerPosition.ReadValue<Vector2>();
-        Debug.Log(cam.ScreenToWorldPoint(touchPosition));
-
-
         //Set up the new Pointer Event
-        m_PointerEventData = new PointerEventData(eventSystem);
-        //Set the Pointer Event Position to that of the mouse position
-        m_PointerEventData.position = touchPosition;
-
-        //Create a list of Raycast Results
+        PointerEventData pointerData = new PointerEventData(EventSystem.current);
         List<RaycastResult> results = new List<RaycastResult>();
 
         //Raycast using the Graphics Raycaster and mouse click position
-        raycaster.Raycast(m_PointerEventData, results);
+        pointerData.position = Input.mousePosition;
+        raycaster.Raycast(pointerData, results);
 
         //For every result returned, output the name of the GameObject on the Canvas hit by the Ray
         foreach (RaycastResult result in results)
         {
             Debug.Log("Hit " + result.gameObject.name);
+            return true;
         }
 
+        return false;
+    }
 
-
-        return true;
+    private void Reset()
+    {
+        if (isMoving) { MoveAroundEnd(); }
+        if (isLooking) { LookAroundEnd(); }
     }
 
     private void MoveAroundStart()
@@ -104,27 +80,33 @@ public class TouchHandler : MonoBehaviour
 
     private void MoveAround()
     {
-        Vector3 direction = touchStart - GetWorldPosition(groundY);
+        if (!isMoving)
+        {
+            MoveAroundStart();
+        }
+        else
+        {
+            Vector3 direction = touchStart - GetWorldPosition(groundY);
 
-        Vector3 targetPosition = new Vector3(
-            cam.transform.position.x + direction.x,
-            cam.transform.position.y + direction.y,
-            cam.transform.position.z + direction.z
-        );
+            Vector3 targetPosition = new Vector3(
+                cam.transform.position.x + direction.x,
+                cam.transform.position.y + direction.y,
+                cam.transform.position.z + direction.z
+            );
 
+            Vector3 maxTargetPosition = new Vector3(
+                Mathf.Clamp(targetPosition.x, minMoveDistance, maxMoveDistance),
+                targetPosition.y,
+                Mathf.Clamp(targetPosition.z, minMoveDistance, maxMoveDistance)
+            );
 
-        Vector3 maxTargetPosition = new Vector3(
-            Mathf.Clamp(targetPosition.x, minMoveDistance, maxMoveDistance),
-            targetPosition.y,
-            Mathf.Clamp(targetPosition.z, minMoveDistance, maxMoveDistance)
-        );
-
-        cam.transform.position = Vector3.Lerp(Camera.main.transform.position, maxTargetPosition, Time.deltaTime * moveSpeed);
+            cam.transform.position = Vector3.Lerp(cam.transform.position, maxTargetPosition, Time.deltaTime * moveSpeed);
+        }
     }
 
     private Vector3 GetWorldPosition(float y)
     {
-        Vector2 touchPosition = touchController.Touch.PrimaryFingerPosition.ReadValue<Vector2>();
+        Vector2 touchPosition = Input.GetTouch(0).position;
         // camera has to be on orthographic
         Ray mousePos = cam.ScreenPointToRay(
             new Vector3(
@@ -147,7 +129,7 @@ public class TouchHandler : MonoBehaviour
 
         rotX = cam.transform.eulerAngles.x;
         rotY = cam.transform.eulerAngles.y;
-        rotateStart = touchController.Touch.SecondaryFingerPosition.ReadValue<Vector2>();
+        rotateStart = Input.GetTouch(1).position;
 
         isLooking = true;
     }
@@ -159,16 +141,23 @@ public class TouchHandler : MonoBehaviour
 
     private void LookAround()
     {
-        Vector3 rotateEnd = touchController.Touch.SecondaryFingerPosition.ReadValue<Vector2>();
+        if (!isLooking)
+        {
+            LookAroundStart();
+        }
+        else
+        {
+            Vector3 rotateEnd = Input.GetTouch(1).position;
 
-        float deltaX = rotateStart.x - rotateEnd.x;
-        float deltaY = rotateStart.y - rotateEnd.y;
+            float deltaX = rotateStart.x - rotateEnd.x;
+            float deltaY = rotateStart.y - rotateEnd.y;
 
-        rotX -= deltaY * Time.deltaTime * rotateSpeed * -1;
-        rotY += deltaX * Time.deltaTime * rotateSpeed * -1;
-        rotX = Mathf.Clamp(rotX, 0f, 90f); // max angler
+            rotX -= deltaY * Time.deltaTime * rotateSpeed * -1;
+            rotY += deltaX * Time.deltaTime * rotateSpeed * -1;
+            rotX = Mathf.Clamp(rotX, 0f, 90f); // max angler
 
-        cam.transform.eulerAngles = new Vector3(rotX, rotY, 0f);
+            cam.transform.eulerAngles = new Vector3(rotX, rotY, 0f);
+        }
     }
 
 }
